@@ -16,6 +16,7 @@ python sample_jobs/submit_wrds_job.py submit --wait     # copy code, qsub, wait,
 | [`sample_jobs/submit_wrds_job.py`](sample_jobs/submit_wrds_job.py) | Runs **on your computer**. Handles SSH, copies files, runs `qsub`, `qstat`, reads logs, uploads to Dropbox |
 | [`sample_jobs/nbbo_batch_job.sh`](sample_jobs/nbbo_batch_job.sh) | Grid Engine **wrapper script**: what actually gets `qsub`'d on WRDS |
 | [`sample_jobs/nbbo_batch_main.py`](sample_jobs/nbbo_batch_main.py) | The research program. Runs **on a WRDS compute node** |
+| [`sample_jobs/SAS/`](sample_jobs/SAS/) | The same job written in SAS, submitted with the same Python script (no local SAS license needed). See its README |
 | [`wrds_queries.py`](wrds_queries.py) | Query functions (`bulk_data_pull`, `nbbo_quotes_bulk_pull`, ...). Opens the WRDS database connection on import |
 | [`wrds_creds.py`](wrds_creds.py) | Reads your username/password from `~/.pgpass` |
 | [`blacklist_files/`](blacklist_files/) | Dates with missing TAQ data, skipped by the queries |
@@ -609,6 +610,70 @@ _SUCCESS  nbbo_5m_20250101_20250131.csv.gz
 ```
 
 Linking Dropbox ([Section 4b](#4b-manual)) works the same way: run `rclone authorize "dropbox"` in PowerShell, then paste the token into `rclone config` on WRDS.
+
+---
+
+## 6. The SAS version
+
+[`sample_jobs/SAS/`](sample_jobs/SAS/) has the same NBBO job written in SAS. **You don't need SAS on your computer.** SAS runs on WRDS, which licenses it for every account. Your computer only runs [`submit_sas_job.py`](sample_jobs/SAS/submit_sas_job.py), which reuses `submit_wrds_job.py` to copy the `.sas` file, run `qsub`, and upload the result to Dropbox. The commands are the same as for the Python job.
+
+| | Python job | SAS job |
+|---|---|---|
+| Program | `sample_jobs/nbbo_batch_main.py` | [`sample_jobs/SAS/nbbo_batch_main.sas`](sample_jobs/SAS/nbbo_batch_main.sas) |
+| Reads the data from | WRDS PostgreSQL server (PostgreSQL SQL, `~/.pgpass`) | WRDS's SAS datasets (`taqmsec.complete_nbbo_YYYYMMDD`, SAS code, no `.pgpass` on WRDS) |
+| Submit from your computer | `python sample_jobs/submit_wrds_job.py ...` | `python sample_jobs/SAS/submit_sas_job.py ...` |
+| Job arguments after `--` | `--start 2025-01-01 --end 2025-01-31 --freq 1s` | `start=2025-01-01 end=2025-01-31 freq=1s symbols=SPY,IVV` |
+| Log | `logs/nbbo_batch.o<JOB_ID>` | `logs/nbbo_sas.o<JOB_ID>` (includes the SAS log) |
+| Results | `/scratch/<group>/<user>/nbbo_batch/<JOB_ID>/` | `/scratch/<group>/<user>/nbbo_sas/<JOB_ID>/` |
+| Dropbox folder | `/wrds_batch_jobs/nbbo` | `/wrds_batch_jobs/nbbo_sas` |
+
+### 6a. Running it
+
+Run these **on your computer**, from the repo folder, not in an SSH session on WRDS:
+
+```bash
+python sample_jobs/SAS/submit_sas_job.py setup          # one time: checks sas/qsas on WRDS, links Dropbox
+python sample_jobs/SAS/submit_sas_job.py submit --wait -- start=2025-01-02 end=2025-01-03
+```
+
+Output from a successful run:
+
+```
+Copied 3 files to ~/wrds_batch_jobs on WRDS.
+Submitted job 40729612.
+Waiting for job 40729612 (checking every 120s). Ctrl-C stops waiting; the job keeps running.
+Job has left the queue.
+Uploaded results of job 40729612 to Dropbox:/wrds_batch_jobs/nbbo_sas
+```
+
+`status`, `logs JOB_ID`, `upload JOB_ID` and `disconnect` work the same as in [Section 2c](#2c-choosing-what-the-job-pulls) and [Section 3](#3-job-output-and-where-it-goes).
+
+### 6b. Running SAS by hand on WRDS (`qsas`)
+
+`qsas` is WRDS's shortcut for submitting a `.sas` file without a wrapper script. It exists **only on WRDS**, so copy the file there first, then log in:
+
+```bash
+# on your computer
+ssh you@wrds-cloud.wharton.upenn.edu "mkdir -p wrds_batch_jobs/sample_jobs/SAS"
+scp sample_jobs/SAS/check_taqmsec.sas you@wrds-cloud.wharton.upenn.edu:wrds_batch_jobs/sample_jobs/SAS/
+ssh you@wrds-cloud.wharton.upenn.edu
+```
+
+```bash
+# on WRDS
+[you@wrds-cloud-login1-h ~]$ cd ~/wrds_batch_jobs
+[you@wrds-cloud-login1-h wrds_batch_jobs]$ qsas sample_jobs/SAS/check_taqmsec.sas
+Your job 40729561 ("check_taqmsec.sas") has been submitted
+[you@wrds-cloud-login1-h wrds_batch_jobs]$ qstat        # qw = waiting, r = running; empty = finished
+[you@wrds-cloud-login1-h wrds_batch_jobs]$ ls check_taqmsec.*
+check_taqmsec.log  check_taqmsec.lst
+```
+
+`qsas` writes `<program>.log` and `<program>.lst` to the directory you ran it from, a minute or two after `qstat` comes back empty. Delete or rename them before running the same program again. [`check_taqmsec.sas`](sample_jobs/SAS/check_taqmsec.sas) is a good first program: it lists the TAQ datasets and their variables, so you can confirm the library name before the real job.
+
+`qsas` takes no arguments or Grid Engine options (no email, no `-pe`/`m_mem_free`), so for the real job use the wrapper through `submit_sas_job.py`.
+
+See [`sample_jobs/SAS/README.md`](sample_jobs/SAS/README.md) for what can and can't be done in SAS, how SAS's SQL differs from PostgreSQL, and how the output compares with the Python job.
 
 ---
 
